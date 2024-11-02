@@ -1,0 +1,76 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+
+contract StakingPlatform {
+    struct StakingPool {
+        uint256 lockUpPeriod; // Lock-up duration in seconds
+        uint256 rewardRate;   // Reward rate as a percentage (e.g., 5%)
+    }
+
+    struct Stake {
+        uint256 amount;
+        uint256 startTime;
+        uint256 poolId;
+    }
+
+    IERC20 public stakingToken;
+    mapping(address => Stake) public stakes;
+    StakingPool[] public stakingPools;
+
+    constructor(IERC20 _stakingToken) {
+        stakingToken = _stakingToken;
+    }
+
+    // Create staking pools with various lock-up periods and reward rates
+    function createStakingPool(uint256 _lockUpPeriod, uint256 _rewardRate) external {
+        stakingPools.push(StakingPool(_lockUpPeriod, _rewardRate));
+    }
+
+    // Stake tokens into a specific pool
+    function stake(uint256 _amount, uint256 _poolId) external {
+        require(_amount > 0, "Amount must be greater than zero.");
+        require(_poolId < stakingPools.length, "Invalid pool.");
+
+        // Transfer tokens to the contract
+        stakingToken.transferFrom(msg.sender, address(this), _amount);
+
+        // Record the stake
+        stakes[msg.sender] = Stake({
+            amount: _amount,
+            startTime: block.timestamp,
+            poolId: _poolId
+        });
+    }
+
+    // Calculate rewards based on staking duration and amount
+    function calculateRewards(address _user) public view returns (uint256) {
+        Stake memory userStake = stakes[_user];
+        StakingPool memory pool = stakingPools[userStake.poolId];
+        uint256 stakingDuration = block.timestamp - userStake.startTime;
+
+        // Reward formula: (amount * rewardRate * stakingDuration) / (lockUpPeriod * 100)
+        uint256 reward = (userStake.amount * pool.rewardRate * stakingDuration) /
+            (pool.lockUpPeriod * 100);
+        return reward;
+    }
+
+    // Unstake tokens after lock-up period
+    function unstake() external {
+        Stake memory userStake = stakes[msg.sender];
+        StakingPool memory pool = stakingPools[userStake.poolId];
+
+        require(userStake.amount > 0, "No staked tokens.");
+        require(block.timestamp >= userStake.startTime + pool.lockUpPeriod, "Lock-up period not reached.");
+
+        uint256 reward = calculateRewards(msg.sender);
+        uint256 totalAmount = userStake.amount + reward;
+
+        // Reset the stake
+        delete stakes[msg.sender];
+
+        // Transfer staked tokens + rewards back to the user
+        stakingToken.transfer(msg.sender, totalAmount);
+    }
+}
