@@ -1,76 +1,61 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+contract AutoPayoutStaking {
+    address public centralWallet; // Central wallet to fund interest
+    uint256 public constant MINIMUM_STAKE_AMOUNT = 0.0001 ether; // 0.0001 ETH
+    uint256 public constant INTEREST_RATE = 10; // 10% interest
 
-contract StakingPlatform {
-    struct StakingPool {
-        uint256 lockUpPeriod; // Lock-up duration in seconds
-        uint256 rewardRate;   // Reward rate as a percentage (e.g., 5%)
+    mapping(address => uint256) public stakes;
+
+    event Staked(address indexed user, uint256 amount);
+    event Unstaked(address indexed user, uint256 amount, uint256 reward);
+
+    constructor(address _centralWallet) {
+        centralWallet = _centralWallet;
     }
 
-    struct Stake {
-        uint256 amount;
-        uint256 startTime;
-        uint256 poolId;
+    // Stake function is now payable to accept Ether
+    function stake() external payable {
+        require(msg.value >= MINIMUM_STAKE_AMOUNT, "Stake amount is too low");
+
+        // Track user's stake
+        stakes[msg.sender] += msg.value;
+
+        emit Staked(msg.sender, msg.value);
     }
 
-    IERC20 public stakingToken;
-    mapping(address => Stake) public stakes;
-    StakingPool[] public stakingPools;
-
-    constructor(IERC20 _stakingToken) {
-        stakingToken = _stakingToken;
-    }
-
-    // Create staking pools with various lock-up periods and reward rates
-    function createStakingPool(uint256 _lockUpPeriod, uint256 _rewardRate) external {
-        stakingPools.push(StakingPool(_lockUpPeriod, _rewardRate));
-    }
-
-    // Stake tokens into a specific pool
-    function stake(uint256 _amount, uint256 _poolId) external {
-        require(_amount > 0, "Amount must be greater than zero.");
-        require(_poolId < stakingPools.length, "Invalid pool.");
-
-        // Transfer tokens to the contract
-        stakingToken.transferFrom(msg.sender, address(this), _amount);
-
-        // Record the stake
-        stakes[msg.sender] = Stake({
-            amount: _amount,
-            startTime: block.timestamp,
-            poolId: _poolId
-        });
-    }
-
-    // Calculate rewards based on staking duration and amount
-    function calculateRewards(address _user) public view returns (uint256) {
-        Stake memory userStake = stakes[_user];
-        StakingPool memory pool = stakingPools[userStake.poolId];
-        uint256 stakingDuration = block.timestamp - userStake.startTime;
-
-        // Reward formula: (amount * rewardRate * stakingDuration) / (lockUpPeriod * 100)
-        uint256 reward = (userStake.amount * pool.rewardRate * stakingDuration) /
-            (pool.lockUpPeriod * 100);
-        return reward;
-    }
-
-    // Unstake tokens after lock-up period
     function unstake() external {
-        Stake memory userStake = stakes[msg.sender];
-        StakingPool memory pool = stakingPools[userStake.poolId];
+        uint256 stakedAmount = stakes[msg.sender];
+        require(stakedAmount > 0, "You have no funds staked");
 
-        require(userStake.amount > 0, "No staked tokens.");
-        require(block.timestamp >= userStake.startTime + pool.lockUpPeriod, "Lock-up period not reached.");
+        // Calculate the reward
+        uint256 reward = calculateReward(stakedAmount);
+        uint256 totalPayout = stakedAmount + reward;
 
-        uint256 reward = calculateRewards(msg.sender);
-        uint256 totalAmount = userStake.amount + reward;
+        // Ensure the central wallet has enough funds to pay the reward
+        require(address(this).balance >= totalPayout, "Insufficient contract balance");
 
-        // Reset the stake
-        delete stakes[msg.sender];
+        // Reset user's stake
+        stakes[msg.sender] = 0;
 
-        // Transfer staked tokens + rewards back to the user
-        stakingToken.transfer(msg.sender, totalAmount);
+        // Transfer the staked amount and reward back to the user
+        payable(msg.sender).transfer(totalPayout);
+
+        emit Unstaked(msg.sender, stakedAmount, reward);
     }
+
+    function calculateReward(uint256 _stakedAmount) public pure returns (uint256) {
+        return (_stakedAmount * INTEREST_RATE) / 100;
+    }
+
+    // Central wallet can deposit Ether for rewards
+    function fundRewardPool() external payable {
+        require(msg.sender == centralWallet, "Only central wallet can fund rewards");
+        require(msg.value > 0, "Must send ETH to fund the pool");
+    }
+
+    // Fallback function to accept Ether
+    receive() external payable {}
 }
+
